@@ -1,18 +1,26 @@
 [
     {
-        "prompt": "What is the sum of 2 and 3?",
+        "prompt": "What is the sum of 40 and 2?",
         "name": "fn_add_numbers",
         "parameters": {
-            "a": 2,
-            "b": 3
+            "a": 40,
+            "b": 2
         }
     },
     {
-        "prompt": "What is the sum of 265 and 345?",
+        "prompt": "Can you add 1050.75 and -30.25 together?",
         "name": "fn_add_numbers",
         "parameters": {
-            "a": 265,
-            "b": 345
+            "a": 1050.75,
+            "b": -30.25
+        }
+    },
+    {
+        "prompt": "I need to calculate 0 plus 0, please.",
+        "name": "fn_add_numbers",
+        "parameters": {
+            "a": 0,
+            "b": 0
         }
     },
     {
@@ -23,10 +31,17 @@
         }
     },
     {
-        "prompt": "Greet john",
+        "prompt": "Please generate a greeting message for a person named O'Connor.",
         "name": "fn_greet",
         "parameters": {
-            "name": "john"
+            "name": "O'Connor"
+        }
+    },
+    {
+        "prompt": "Say hello to Dr. Strange!",
+        "name": "fn_greet",
+        "parameters": {
+            "name": "Dr. Strange"
         }
     },
     {
@@ -34,6 +49,36 @@
         "name": "fn_reverse_string",
         "parameters": {
             "s": "hello"
+        }
+    },
+    {
+        "prompt": "Can you reverse this exact string: 'Racecar 123! @#'",
+        "name": "fn_reverse_string",
+        "parameters": {
+            "s": "Racecar 123! @#"
+        }
+    },
+    {
+        "prompt": "Reverse the string '   spaces at the beginning and end   '",
+        "name": "fn_reverse_string",
+        "parameters": {
+            "s": "   spaces at the beginning and end   "
+        }
+    },
+    {
+        "prompt": "Add the number 5 and set the boolean flag to true.",
+        "name": "fn_add_numbers",
+        "parameters": {
+            "a": 5,
+            "b": 0
+        }
+    },
+    {
+        "prompt": "What is 9999999.99 + 0.01?",
+        "name": "fn_add_numbers",
+        "parameters": {
+            "a": 9999999.99,
+            "b": 0.01
         }
     }
 ]

@@ -11,7 +11,7 @@ def main() -> None:
 
     parser.add_argument("--functions_definition",
                         type=str,
-                        default="data/input/function_definitions.json",
+                        default="data/input/functions_definition.json",
                         help="path to the function definitions Json file"
                         )
 
@@ -51,7 +51,6 @@ def main() -> None:
 
             result_dict = result_obj.model_dump()
 
-            result_dict["prompt"] = prompt_txt
             results.append(result_dict)
 
         output_dir = os.path.dirname(args.output)

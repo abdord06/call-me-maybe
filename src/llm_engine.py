@@ -37,8 +37,41 @@ class FunctionCaller(BaseModel):
         self.reversed_vocab = {value: key
                                for key, value in self.vocab.items()}
 
-    def is_valid_json(self, text: str) -> bool:
-        text = text.replace(' ', '').replace('\n', '')
+    def get_current_function(self, text: str) -> FunctionDefinition | None:
+        target_start = '{"name":"'
+        if target_start in text:
+            start_idx = len(target_start)
+            end_index = text.find('"', start_idx)
+            if end_index != -1:
+                fn_name = text[start_idx:end_index]
+                for fn in self.function_definitions:
+                    if fn.name == fn_name:
+                        return fn
+        return None
+
+    def get_active_parameter_type(self, text: str,
+                                  current_fn: FunctionDefinition) -> str:
+        params_idx = text.find('"parameters":')
+        if params_idx == -1:
+            return ""
+        params_section = text[params_idx + len('"parameters":'):]
+        keys_found = re.findall(r'"([^"]+)"\s*:', params_section)
+        if not keys_found:
+            return ""
+        last_key = keys_found[-1]
+        last_colon = params_section.rfind(':')
+        last_comma = params_section.rfind(',')
+        if last_comma > last_colon:
+            return ""
+        param_def = current_fn.parameters.get(last_key, {})
+        return param_def.get('type', '')
+
+    def is_valid_json(self, generated_text: str, token_str: str) -> bool:
+        token_str = token_str.replace('Ġ', ' ')
+        text = generated_text + token_str
+        text = text.replace(' ', '').replace('\n',
+                                             '').replace('\r',
+                                                         '').replace('\t', '')
 
         if not text.startswith('{'):
             return False
@@ -70,6 +103,23 @@ class FunctionCaller(BaseModel):
         if not text.startswith(target_params):
             return False
 
+        cl_gen = generated_text.replace(' ', '').replace('\n', '')
+        cl_gen = cl_gen.replace('\r', '').replace('\t', '')
+        target_params = '"parameters":{'
+        if target_params in cl_gen:
+            current_fn = self.get_current_function(cl_gen)
+            if current_fn:
+                expected_type = self.get_active_parameter_type(
+                    cl_gen, current_fn
+                    )
+                if expected_type == 'number':
+                    if not all(c in '0123456789.- ,}\n\r\t'
+                               for c in token_str):
+                        return False
+                elif expected_type == 'boolean':
+                    if not all(c in 'truefals ,}\n\t\r'
+                               for c in token_str):
+                        return False
         return True
 
     def process_prompt(self, prompt: str) -> FunctionCallResult:
@@ -104,13 +154,12 @@ class FunctionCaller(BaseModel):
                 logits[ghost_token] = float('-inf')
 
             for token_str, token_id in self.vocab.items():
-                # token_str = token_str.replace('Ġ', '')
                 if not token_str:
                     logits[token_id] = float('-inf')
                     continue
-                test_json = generated_text + token_str
+                # test_json = generated_text + token_str
 
-                if not self.is_valid_json(test_json):
+                if not self.is_valid_json(generated_text, token_str):
                     logits[token_id] = float('-inf')
 
             max_score = max(logits)
@@ -122,8 +171,7 @@ class FunctionCaller(BaseModel):
 
             token_str = self.reversed_vocab.get(next_token_id, "")
             token_str = token_str.replace('Ġ', ' ')
-            # print(next_token_id)
-            # print(token_str)
+            # print(token_str, end="", flush=True)
             generated_text += token_str
             input_ids.append(next_token_id)
 
