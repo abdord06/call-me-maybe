@@ -1,11 +1,12 @@
 import json
 import re
-from pydantic import BaseModel, ConfigDict, Field
 from typing import Any, Dict, List
-from llm_sdk import Small_LLM_Model
+from pydantic import BaseModel, ConfigDict, Field
+from llm_sdk import Small_LLM_Model  # type: ignore
 
 
 class FunctionDefinition(BaseModel):
+    """Pydantic model representing a function's definition and schema."""
     name: str
     description: str
     parameters: Dict[str, Any]
@@ -13,12 +14,14 @@ class FunctionDefinition(BaseModel):
 
 
 class FunctionCallResult(BaseModel):
+    """Pydantic model representing the final result of the LLM generation."""
     prompt: str
     name: str
     parameters: Dict[str, Any]
 
 
 class FunctionCaller(BaseModel):
+    """Engine responsible for constrained decoding and LLM interaction."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
     function_definitions: List[FunctionDefinition]
@@ -28,19 +31,29 @@ class FunctionCaller(BaseModel):
     reversed_vocab: Dict[int, str] = Field(default_factory=dict)
 
     def model_post_init(self, __context: Any) -> None:
+        """Initializes the model vocabulary upon instantiation."""
         print("loading model...")
 
         vocab_path = self.model.get_path_to_vocabulary_json()
         with open(vocab_path, 'r', encoding='utf-8') as f:
             self.vocab = json.load(f)
         print(f"model and vocab ({len(self.vocab)} tokens) ready")
-        self.reversed_vocab = {value: key
-                               for key, value in self.vocab.items()}
+        self.reversed_vocab = {value: key for key, value in self.vocab.items()}
 
     def get_current_function(self, text: str) -> FunctionDefinition | None:
+        """Extracts the currently generated function name from the text.
+
+        Args:
+            text (str): The currently generated JSON string.
+
+        Returns:
+            FunctionDefinition | None: The matched function definition.
+        """
         target_start = '{"name":"'
-        if target_start in text:
-            start_idx = len(target_start)
+        start_idx = text.find(target_start)
+
+        if start_idx != -1:
+            start_idx += len(target_start)
             end_index = text.find('"', start_idx)
             if end_index != -1:
                 fn_name = text[start_idx:end_index]
@@ -49,24 +62,50 @@ class FunctionCaller(BaseModel):
                         return fn
         return None
 
-    def get_active_parameter_type(self, text: str,
-                                  current_fn: FunctionDefinition) -> str:
+    def get_active_parameter_type(
+        self, text: str, current_fn: FunctionDefinition
+    ) -> str:
+        """Determines the expected type of the parameter currently being
+        generated.
+
+        Args:
+            text (str): The current text generation state.
+            current_fn (FunctionDefinition): The chosen function schema.
+
+        Returns:
+            str: The expected type (e.g., 'number', 'boolean', 'string').
+        """
         params_idx = text.find('"parameters":')
         if params_idx == -1:
             return ""
+
         params_section = text[params_idx + len('"parameters":'):]
         keys_found = re.findall(r'"([^"]+)"\s*:', params_section)
+
         if not keys_found:
             return ""
+
         last_key = keys_found[-1]
         last_colon = params_section.rfind(':')
         last_comma = params_section.rfind(',')
+
         if last_comma > last_colon:
             return ""
+
         param_def = current_fn.parameters.get(last_key, {})
-        return param_def.get('type', '')
+        return str(param_def.get('type', ''))
 
     def is_valid_json(self, generated_text: str, token_str: str) -> bool:
+        """Validates if the new token maintains valid JSON and adheres to the
+        schema.
+
+        Args:
+            generated_text (str): The text generated so far.
+            token_str (str): The new token candidate to validate.
+
+        Returns:
+            bool: True if the token is valid, False otherwise.
+        """
         token_str = token_str.replace('Ġ', ' ')
         text = generated_text + token_str
         text = text.replace(' ', '').replace('\n',
@@ -106,6 +145,7 @@ class FunctionCaller(BaseModel):
         cl_gen = generated_text.replace(' ', '').replace('\n', '')
         cl_gen = cl_gen.replace('\r', '').replace('\t', '')
         target_params = '"parameters":{'
+
         if target_params in cl_gen:
             current_fn = self.get_current_function(cl_gen)
             if current_fn:
@@ -123,8 +163,18 @@ class FunctionCaller(BaseModel):
         return True
 
     def process_prompt(self, prompt: str) -> FunctionCallResult:
-        system_context = ("You are a helpful assistant. You have "
-                          "access to the following functions:\n")
+        """Processes a natural language prompt using constrained decoding.
+
+        Args:
+            prompt (str): The user's input request.
+
+        Returns:
+            FunctionCallResult: The strictly formatted function call.
+        """
+        system_context = (
+            "You are a helpful assistant. You have access to the "
+            "following functions:\n"
+        )
         for fn in self.function_definitions:
             system_context += f"- Function Name: {fn.name}\n"
             system_context += f"  Description: {fn.description}\n"
@@ -150,6 +200,7 @@ class FunctionCaller(BaseModel):
             if not generated_text.strip().endswith('}'):
                 for special_token in [151643, 151644, 151645]:
                     logits[special_token] = float('-inf')
+
             for ghost_token in range(len(self.vocab), len(logits)):
                 logits[ghost_token] = float('-inf')
 
@@ -157,7 +208,6 @@ class FunctionCaller(BaseModel):
                 if not token_str:
                     logits[token_id] = float('-inf')
                     continue
-                # test_json = generated_text + token_str
 
                 if not self.is_valid_json(generated_text, token_str):
                     logits[token_id] = float('-inf')
@@ -171,7 +221,6 @@ class FunctionCaller(BaseModel):
 
             token_str = self.reversed_vocab.get(next_token_id, "")
             token_str = token_str.replace('Ġ', ' ')
-            # print(token_str, end="", flush=True)
             generated_text += token_str
             input_ids.append(next_token_id)
 
@@ -207,6 +256,7 @@ class FunctionCaller(BaseModel):
             print(f"something in json format went wrong: {e}")
             fn_name = "error"
             fn_parmtr = {}
+
         return FunctionCallResult(
             prompt=prompt,
             name=fn_name,

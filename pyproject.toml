@@ -1,13 +1,13 @@
 [project]
 name = "call-me-maybe"
 version = "0.1.0"
-description = "Add your description here"
+description = "Function calling tool that translates natural language prompts into structured function calls using constrained decoding with a small LLM model."
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.10"
 dependencies = [
     "llm-sdk",
-    "numpy>=2.4.4",
-    "pydantic>=2.13.1",
+    "numpy>=2.0.0",
+    "pydantic>=2.0",
 ]
 
 [dependency-groups]
