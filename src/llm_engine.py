@@ -95,6 +95,45 @@ class FunctionCaller(BaseModel):
         param_def = current_fn.parameters.get(last_key, {})
         return str(param_def.get('type', ''))
 
+    def check_parmetre_key(self, cl_gen: str,
+                           token_str: str,
+                           current_fn: FunctionDefinition) -> bool:
+
+        target_params = '"parameters":{'
+        allowed_params = list(current_fn.parameters.keys())
+        last_comma_idx = cl_gen.rfind(',')
+        param_start_idx = (cl_gen.find(target_params) +
+                           len(target_params) - 1)
+        search_start = max(param_start_idx, last_comma_idx)
+        current_chunk = cl_gen[search_start+1:] + token_str
+        first_quote_idx = current_chunk.find('"')
+        if first_quote_idx == -1:
+            if current_chunk != "":
+                return False
+            return True
+
+        second_quote_idx = current_chunk.find('"', first_quote_idx + 1)
+
+        if second_quote_idx == -1:
+            current_key = current_chunk[first_quote_idx + 1:]
+            if current_key and not any(k.startswith(current_key)
+                                       for k in allowed_params):
+                return False
+        else:
+            current_key = current_chunk[first_quote_idx + 1:second_quote_idx]
+
+            if current_key not in allowed_params:
+                return False
+
+            after_quote = current_chunk[second_quote_idx + 1:]
+            if after_quote:
+                if not after_quote.startswith(':'):
+                    return False
+                if after_quote.count(':') > 1:
+                    return False
+
+        return True
+
     def is_valid_json(self, generated_text: str, token_str: str) -> bool:
         """Validates if the new token maintains valid JSON and adheres to the
         schema.
@@ -149,6 +188,11 @@ class FunctionCaller(BaseModel):
         if target_params in cl_gen:
             current_fn = self.get_current_function(cl_gen)
             if current_fn:
+                if not self.check_parmetre_key(cl_gen,
+                                               token_str,
+                                               current_fn):
+                    return False
+
                 expected_type = self.get_active_parameter_type(
                     cl_gen, current_fn
                     )
