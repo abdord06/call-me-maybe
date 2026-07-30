@@ -239,24 +239,31 @@ class FunctionCaller(BaseModel):
                         if expected_type == 'string':
                             if not value_chunk.startswith('"'):
                                 return False
-                            clean_val = value_chunk[1:] 
+                            clean_val = value_chunk[1:]
                             if '"' in clean_val:
                                 actual_val = clean_val.split('"')[0]
                                 if actual_val not in expected_enum:
                                     return False
                             else:
-                                if clean_val and not any(opt.startswith(clean_val) for opt in expected_enum):
+                                if (clean_val and not
+                                    any(opt.startswith(clean_val)
+                                        for opt in expected_enum)):
                                     return False
 
                         else:
-                            str_enums = [str(opt).lower() if isinstance(opt, bool) else str(opt) for opt in expected_enum]
+                            str_enums = [str(opt).lower()
+                                         if isinstance(opt, bool)
+                                         else str(opt)
+                                         for opt in expected_enum]
 
                             if any(c in value_chunk for c in ',} \t\n\r'):
-                                actual_val = re.split(r'[,}\s]', value_chunk)[0]
+                                actual_val = (re.split(r'[,}\s]',
+                                              value_chunk)[0])
                                 if actual_val not in str_enums:
                                     return False
                             else:
-                                if not any(opt.startswith(value_chunk) for opt in str_enums):
+                                if not any(opt.startswith(value_chunk)
+                                           for opt in str_enums):
                                     return False
 
                 elif expected_type == 'number':
