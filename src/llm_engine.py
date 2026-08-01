@@ -170,6 +170,20 @@ class FunctionCaller(BaseModel):
         Returns:
             bool: True if the token is valid, False otherwise.
         """
+        if not self.function_definitions:
+            return False
+
+        token_str = token_str.replace('Ġ', ' ')
+
+        if not token_str.strip():
+            stripped_gen = generated_text.replace(' ', '').replace('\n', '')
+            stripped_gen = stripped_gen.replace('\r', '').replace('\t', '')
+            if '"parameters":{' not in stripped_gen:
+                return False
+
+            if generated_text.count('"') % 2 == 0:
+                return False
+
         token_str = token_str.replace('Ġ', ' ')
         text = generated_text + token_str
         text = text.replace(' ', '').replace('\n',
@@ -301,7 +315,6 @@ class FunctionCaller(BaseModel):
                            "parameters\": {\"key1\": value1, \"key2\": "
                            "value2}}\n\n")
 
-        # seed_text = '{"name":"'
         full_prompt = (f"{system_context}User Prompt: {prompt}\n"
                        f"Answer:")
 
@@ -327,19 +340,27 @@ class FunctionCaller(BaseModel):
                 token_id = int(token_id_np)
 
                 if token_id >= len(self.vocab):
+                    logits[token_id] = float('-inf')
                     continue
 
                 token_str = self.reversed_vocab.get(token_id, "")
                 if not token_str:
+                    logits[token_id] = float('-inf')
                     continue
 
-                if self.is_valid_json(generated_text, token_str):
+                if not self.is_valid_json(generated_text, token_str):
+                    logits[token_id] = float('-inf')
+                else:
                     next_token_id = token_id
                     break
 
             if next_token_id == -1:
                 print("model blocked, no valid token")
-                break
+                return FunctionCallResult(
+                    prompt=prompt,
+                    name="error",
+                    parameters={}
+                )
 
             token_str = self.reversed_vocab.get(next_token_id, "")
             token_str = token_str.replace('Ġ', ' ')
