@@ -171,13 +171,10 @@ class FunctionCaller(BaseModel):
 
             if '"' in selected_char:
                 quote_pos = selected_char.index('"')
-                # Check if it's escaped (preceded by backslash)
                 if quote_pos > 0 and selected_char[quote_pos - 1] == '\\':
-                    # It's escaped, include it in the string
                     string_val += selected_char
                     prompt_tokens.append(selected_id)
                 else:
-                    # It's unescaped, this is the end of the string
                     string_val += selected_char[:quote_pos]
                     break
             else:
@@ -251,7 +248,9 @@ class FunctionCaller(BaseModel):
             None,
         )
         if not selected_function_schema:
-            return FunctionCallResult(prompt=prompt, fn_name="error", args={})
+            return FunctionCallResult(prompt=prompt,
+                                      name="error",
+                                      parameters={})
 
         param_transition = '","parameters":{'
         final_json_string += param_transition
@@ -260,7 +259,7 @@ class FunctionCaller(BaseModel):
         extracted_arguments: Dict[str, Any] = {}
         required_keys = list(selected_function_schema.parameters.keys())
 
-        # 4. Generate data for each parameter sequentially
+        # Generate data for each parameter sequentially
         for index, param_name in enumerate(required_keys):
             key_syntax = f'"{param_name}":'
             final_json_string += key_syntax
@@ -359,7 +358,6 @@ class FunctionCaller(BaseModel):
                 self._append_encoded_text(prompt_tokens, '"')
                 extracted_arguments[param_name] = generated_val
 
-            # Format syntax depending on parameter position
             if index < len(required_keys) - 1:
                 final_json_string += ','
                 self._append_encoded_text(prompt_tokens, ',')
@@ -367,7 +365,6 @@ class FunctionCaller(BaseModel):
                 final_json_string += '}'
                 self._append_encoded_text(prompt_tokens, '}')
 
-        # Safely close JSON if a function lacks parameters
         if not required_keys:
             final_json_string += '}'
             self._append_encoded_text(prompt_tokens, '}')

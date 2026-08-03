@@ -39,6 +39,16 @@ def main() -> None:
         with open(args.input, 'r', encoding='utf-8') as f:
             input_tests: List[Dict[str, Any]] = json.load(f)
 
+        if not isinstance(input_tests, list):
+            print("Error: 'function_calling_tests.json'"
+                  " must be a JSON Array [].")
+            sys.exit(1)
+
+        if not isinstance(function_defs, list):
+            print("Error: 'functions_definition.json'"
+                  " must be a JSON Array [].")
+            sys.exit(1)
+
         print("Success in parsing input files")
         print(f"Output will be registered in: {args.output}")
 
@@ -50,12 +60,27 @@ def main() -> None:
 
         results: List[Dict[str, Any]] = []
         for test in input_tests:
-            prompt_txt = test["prompt"]
+            prompt_txt = test.get("prompt")
+            if prompt_txt is None:
+                print("\nWarning: Test object is missing "
+                      "the 'prompt' key. Defaulting to empty string.")
+                prompt_txt = ""
+
             print(f"\nAnswering: {prompt_txt}")
 
-            result_obj = engine.process_prompt(prompt_txt)
-            result_dict = result_obj.model_dump()
-            results.append(result_dict)
+            try:
+                result_obj = engine.process_prompt(prompt_txt)
+                result_dict = result_obj.model_dump()
+                results.append(result_dict)
+            except Exception as e:
+                print(f"Error processing prompt '{prompt_txt[:20]}...': {e}")
+                results.append({
+                    "prompt": prompt_txt,
+                    "name": "error",
+                    "parameters": {}
+                }
+                )
+                continue
 
         output_dir = os.path.dirname(args.output)
         if output_dir:
