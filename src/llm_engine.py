@@ -1,5 +1,4 @@
 import json
-import re
 import numpy as np
 from typing import Any, Dict, List
 from pydantic import BaseModel, ConfigDict, Field
@@ -31,6 +30,21 @@ class FunctionCaller(BaseModel):
     vocab: Dict[str, int] = Field(default_factory=dict)
     reversed_vocab: Dict[int, str] = Field(default_factory=dict)
 
+    def _normalize_token_text(self, token_text: str) -> str:
+        return token_text.replace('Ġ', ' ').replace('Ċ', '\n')
+
+    def _token_text(self, token_id: int) -> str:
+        raw_text = self.reversed_vocab.get(token_id, "")
+        return self._normalize_token_text(raw_text)
+
+    def _append_encoded_text(
+        self,
+        prompt_tokens: List[int],
+        text: str,
+    ) -> None:
+        encoded_text = self.model.encode(text).flatten().tolist()
+        prompt_tokens.extend(encoded_text)
+
     def model_post_init(self, __context: Any) -> None:
         """Initializes the model vocabulary upon instantiation."""
         print("loading model...")
@@ -39,266 +53,158 @@ class FunctionCaller(BaseModel):
         with open(vocab_path, 'r', encoding='utf-8') as f:
             self.vocab = json.load(f)
         print(f"model and vocab ({len(self.vocab)} tokens) ready")
-        self.reversed_vocab = {value: key for key, value in self.vocab.items()}
 
-    def get_current_function(self, text: str) -> FunctionDefinition | None:
-        """Extracts the currently generated function name from the text.
+        self.reversed_vocab = {
+            int(value): key for key, value in self.vocab.items()
+        }
 
-        Args:
-            text (str): The currently generated JSON string.
+    def _find_allowed_continuations(
+        self,
+        current_str: str,
+        allowed_targets: List[str],
+    ) -> List[int]:
+        """Scan vocabulary tokens that extend the current string toward valid
+        targets."""
+        legal_token_ids = []
+        for token_id, token_chars in self.reversed_vocab.items():
+            clean_token = self._normalize_token_text(token_chars)
+            test_str = current_str + clean_token
 
-        Returns:
-            FunctionDefinition | None: The matched function definition.
-        """
-        target_start = '{"name":"'
-        start_idx = text.find(target_start)
+            for target in allowed_targets:
+                if target.startswith(test_str) or test_str == target:
+                    legal_token_ids.append(token_id)
+                    break
+        return legal_token_ids
 
-        if start_idx != -1:
-            start_idx += len(target_start)
-            end_index = text.find('"', start_idx)
-            if end_index != -1:
-                fn_name = text[start_idx:end_index]
-                for fn in self.function_definitions:
-                    if fn.name == fn_name:
-                        return fn
-        return None
-
-    def get_active_parameter_enum(
-        self, text: str, current_fn: FunctionDefinition
-    ) -> list | None:
-        """Extracts the 'enum' list for the current parameter if it exists."""
-        params_idx = text.find('"parameters":')
-        if params_idx == -1:
-            return None
-
-        params_section = text[params_idx + len('"parameters":'):]
-        keys_found = re.findall(r'"([^"]+)"\s*:', params_section)
-
-        if not keys_found:
-            return None
-
-        last_key = keys_found[-1]
-        last_colon = params_section.rfind(':')
-        last_comma = params_section.rfind(',')
-
-        if last_comma > last_colon:
-            return None
-
-        param_def = current_fn.parameters.get(last_key, {})
-        return param_def.get('enum')
-
-    def get_active_parameter_type(
-        self, text: str, current_fn: FunctionDefinition
+    def _drive_to_target_string(
+        self,
+        prompt_tokens: List[int],
+        target_strings: List[str],
     ) -> str:
-        """Determines the expected type of the parameter currently being
-        generated.
+        """Restrict output to a predefined list of valid strings."""
+        accumulated_result = ""
+        safety_limit = 25
 
-        Args:
-            text (str): The current text generation state.
-            current_fn (FunctionDefinition): The chosen function schema.
+        for _ in range(safety_limit):
+            valid_next_ids = self._find_allowed_continuations(
+                accumulated_result,
+                target_strings,
+            )
+            if not valid_next_ids:
+                break
 
-        Returns:
-            str: The expected type (e.g., 'number', 'boolean', 'string').
-        """
-        params_idx = text.find('"parameters":')
-        if params_idx == -1:
-            return ""
+            raw_logits = self.model.get_logits_from_input_ids(prompt_tokens)
+            masked_logits = np.full(len(raw_logits), -np.inf)
 
-        params_section = text[params_idx + len('"parameters":'):]
-        keys_found = re.findall(r'"([^"]+)"\s*:', params_section)
+            for valid_id in valid_next_ids:
+                if (valid_id < len(masked_logits) and
+                        valid_id < len(raw_logits)):
+                    masked_logits[valid_id] = raw_logits[valid_id]
 
-        if not keys_found:
-            return ""
+            best_id = int(np.argmax(masked_logits))
+            best_str = self._token_text(best_id)
 
-        last_key = keys_found[-1]
-        last_colon = params_section.rfind(':')
-        last_comma = params_section.rfind(',')
+            accumulated_result += best_str
+            prompt_tokens.append(best_id)
 
-        if last_comma > last_colon:
-            return ""
+            if accumulated_result in target_strings:
+                break
 
-        param_def = current_fn.parameters.get(last_key, {})
-        return str(param_def.get('type', ''))
+        return accumulated_result
 
-    def check_parmetre_key(self, cl_gen: str,
-                           token_str: str,
-                           current_fn: FunctionDefinition) -> bool:
+    def _extract_numeric_value(self, prompt_tokens: List[int]) -> str:
+        """Force the model to yield only valid characters for a number."""
+        numeric_str = ""
+        valid_chars = set("0123456789.-")
+        halting_chars = set(",} \n\t")
 
-        target_params = '"parameters":{'
-        allowed_params = list(current_fn.parameters.keys())
-        last_comma_idx = cl_gen.rfind(',')
-        param_start_idx = (cl_gen.find(target_params) +
-                           len(target_params) - 1)
-        search_start = max(param_start_idx, last_comma_idx)
-        current_chunk = cl_gen[search_start+1:] + token_str
-        first_quote_idx = current_chunk.find('"')
-        if first_quote_idx == -1:
-            if current_chunk != "":
-                return False
-            return True
+        for _ in range(20):
+            raw_logits = self.model.get_logits_from_input_ids(prompt_tokens)
+            sorted_candidates = np.argsort(raw_logits)[::-1]
 
-        second_quote_idx = current_chunk.find('"', first_quote_idx + 1)
+            selected_id = -1
+            selected_char = ""
 
-        if second_quote_idx == -1:
-            current_key = current_chunk[first_quote_idx + 1:]
-            if current_key and not any(k.startswith(current_key)
-                                       for k in allowed_params):
-                return False
-        else:
-            current_key = current_chunk[first_quote_idx + 1:second_quote_idx]
+            for candidate_id in sorted_candidates:
+                candidate_str = self._token_text(int(candidate_id))
+                if not candidate_str:
+                    continue
 
-            if current_key not in allowed_params:
-                return False
+                if any(char in halting_chars for char in candidate_str):
+                    return numeric_str if numeric_str else "0"
 
-            after_quote = current_chunk[second_quote_idx + 1:]
-            if after_quote:
-                if not after_quote.startswith(':'):
-                    return False
-                if after_quote.count(':') > 1:
-                    return False
+                if all(char in valid_chars for char in candidate_str):
+                    if candidate_str.count('.') + numeric_str.count('.') <= 1:
+                        selected_id = candidate_id
+                        selected_char = candidate_str
+                        break
 
-        return True
+            if selected_id == -1:
+                break
 
-    def is_valid_json(self, generated_text: str, token_str: str) -> bool:
-        """Validates if the new token maintains valid JSON and adheres to the
-        schema.
+            numeric_str += selected_char
+            prompt_tokens.append(selected_id)
 
-        Args:
-            generated_text (str): The text generated so far.
-            token_str (str): The new token candidate to validate.
+        return numeric_str.strip() if numeric_str.strip() else "0"
 
-        Returns:
-            bool: True if the token is valid, False otherwise.
-        """
-        if not self.function_definitions:
-            return False
+    def _extract_string_value(self, prompt_tokens: List[int]) -> str:
+        """Generate a string and stop when a closing quote appears."""
+        string_val = ""
+        for _ in range(60):
+            raw_logits = self.model.get_logits_from_input_ids(prompt_tokens)
+            sorted_ids = np.argsort(raw_logits)[::-1]
 
-        token_str = token_str.replace('Ġ', ' ')
+            selected_id = -1
+            selected_char = ""
 
-        if not token_str.strip():
-            stripped_gen = generated_text.replace(' ', '').replace('\n', '')
-            stripped_gen = stripped_gen.replace('\r', '').replace('\t', '')
-            if '"parameters":{' not in stripped_gen:
-                return False
+            for token_id in sorted_ids:
+                token_str = self._token_text(int(token_id))
+                if not token_str:
+                    continue
 
-            if generated_text.count('"') % 2 == 0:
-                return False
+                selected_id = int(token_id)
+                selected_char = token_str
+                break
 
-        token_str = token_str.replace('Ġ', ' ')
-        text = generated_text + token_str
-        text = text.replace(' ', '').replace('\n',
-                                             '').replace('\r',
-                                                         '').replace('\t', '')
+            if selected_id == -1:
+                break
 
-        if not text.startswith('{'):
-            return False
+            if '"' in selected_char:
+                quote_pos = selected_char.index('"')
+                # Check if it's escaped (preceded by backslash)
+                if quote_pos > 0 and selected_char[quote_pos - 1] == '\\':
+                    # It's escaped, include it in the string
+                    string_val += selected_char
+                    prompt_tokens.append(selected_id)
+                else:
+                    # It's unescaped, this is the end of the string
+                    string_val += selected_char[:quote_pos]
+                    break
+            else:
+                string_val += selected_char
+                prompt_tokens.append(selected_id)
 
-        target_start = '{"name":"'
-        if len(text) <= len(target_start):
-            return target_start.startswith(text)
-
-        if not text.startswith(target_start):
-            return False
-
-        allowed_functions = [fn.name for fn in self.function_definitions]
-        end_quote_idx = text.find('"', len(target_start))
-
-        if end_quote_idx == -1:
-            current_fn_name = text[len(target_start):]
-            return any(fn.startswith(current_fn_name)
-                       for fn in allowed_functions)
-
-        current_fn_name = text[len(target_start):end_quote_idx]
-        if current_fn_name not in allowed_functions:
-            return False
-
-        target_params = f'{target_start}{current_fn_name}","parameters":{{'
-
-        if len(text) <= len(target_params):
-            return target_params.startswith(text)
-
-        if not text.startswith(target_params):
-            return False
-
-        cl_gen = generated_text.replace(' ', '').replace('\n', '')
-        cl_gen = cl_gen.replace('\r', '').replace('\t', '')
-        target_params = '"parameters":{'
-
-        if target_params in cl_gen:
-            current_fn = self.get_current_function(cl_gen)
-            if current_fn:
-                if '}' in token_str:
-                    for required_key in current_fn.parameters.keys():
-                        if f'"{required_key}":' not in text:
-                            return False
-
-                if not self.check_parmetre_key(cl_gen,
-                                               token_str,
-                                               current_fn):
-                    return False
-
-                expected_type = self.get_active_parameter_type(
-                    cl_gen, current_fn
-                )
-                expected_enum = self.get_active_parameter_enum(
-                    cl_gen, current_fn
-                )
-
-                if expected_enum:
-                    last_colon_idx = cl_gen.rfind(':')
-                    value_chunk = cl_gen[last_colon_idx + 1:] + token_str
-                    value_chunk = value_chunk.lstrip(' \t\n\r')
-
-                    if value_chunk:
-                        if expected_type == 'string':
-                            if not value_chunk.startswith('"'):
-                                return False
-                            clean_val = value_chunk[1:]
-                            if '"' in clean_val:
-                                actual_val = clean_val.split('"')[0]
-                                if actual_val not in expected_enum:
-                                    return False
-                            else:
-                                if (clean_val and not
-                                    any(opt.startswith(clean_val)
-                                        for opt in expected_enum)):
-                                    return False
-
-                        else:
-                            str_enums = [str(opt).lower()
-                                         if isinstance(opt, bool)
-                                         else str(opt)
-                                         for opt in expected_enum]
-
-                            if any(c in value_chunk for c in ',} \t\n\r'):
-                                actual_val = (re.split(r'[,}\s]',
-                                              value_chunk)[0])
-                                if actual_val not in str_enums:
-                                    return False
-                            else:
-                                if not any(opt.startswith(value_chunk)
-                                           for opt in str_enums):
-                                    return False
-
-                elif expected_type == 'number':
-                    if not all(c in '0123456789.- ,}\n\r\t'
-                               for c in token_str):
-                        return False
-                elif expected_type == 'boolean':
-                    if not all(c in 'truefals ,}\n\t\r'
-                               for c in token_str):
-                        return False
-        return True
+        return string_val
 
     def process_prompt(self, prompt: str) -> FunctionCallResult:
-        """Processes a natural language prompt using constrained decoding.
+        """Process a prompt using structured state machine decoding."""
 
-        Args:
-            prompt (str): The user's input request.
+        prompt = str(prompt) if prompt is not None else ""
 
-        Returns:
-            FunctionCallResult: The strictly formatted function call.
-        """
+        if not prompt or not prompt.strip():
+            print("Error: Empty or whitespace-only prompt")
+            return FunctionCallResult(
+                prompt=prompt,
+                name="error",
+                parameters={"error": "Empty prompt"})
+
+        if not self.function_definitions:
+            print("model blocked, no valid token")
+            return FunctionCallResult(
+                prompt=prompt,
+                name="error",
+                parameters={})
+
         system_context = (
             "You are a helpful assistant. You have access to the "
             "following functions:\n"
@@ -306,102 +212,172 @@ class FunctionCaller(BaseModel):
         for fn in self.function_definitions:
             system_context += f"- Function Name: {fn.name}\n"
             system_context += f"  Description: {fn.description}\n"
-            system_context += f"  Parameters: {json.dumps(fn.parameters)}\n\n"
+            system_context += (
+                f"  Parameters: {json.dumps(fn.parameters)}\n\n"
+            )
 
-        system_context += ("Choose the correct function based on "
-                           "the user's prompt.\n")
-        system_context += ("You must respond ONLY with a valid JSON object "
-                           "in this format: {\"name\": \"function_name\", \""
-                           "parameters\": {\"key1\": value1, \"key2\": "
-                           "value2}}\n\n")
+        system_context += (
+            "Choose the correct function based on "
+            "the user's prompt.\n"
+        )
+        system_context += (
+            "You must respond ONLY with a valid JSON object.\n\n"
+        )
 
-        full_prompt = (f"{system_context}User Prompt: {prompt}\n"
-                       f"Answer:")
+        full_prompt = (
+            f"{system_context}User Prompt: {prompt}\n"
+            f"Answer:"
+        )
 
-        raw_input = self.model.encode(full_prompt)
-        input_ids = raw_input.flatten().tolist()
+        prompt_tokens = self.model.encode(full_prompt).flatten().tolist()
 
-        generated_text = ""
-        max_tokens = 150
+        start_syntax = '{"name":"'
+        final_json_string = start_syntax
+        self._append_encoded_text(prompt_tokens, start_syntax)
 
-        for _ in range(max_tokens):
-            logits = self.model.get_logits_from_input_ids(input_ids)
+        legal_function_names = [fn.name for fn in self.function_definitions]
+        inferred_fn_name = self._drive_to_target_string(
+            prompt_tokens,
+            legal_function_names,
+        )
+        final_json_string += inferred_fn_name
 
-            if not generated_text.strip().endswith('}'):
-                for special_token in [151643, 151644, 151645]:
-                    logits[special_token] = float('-inf')
+        selected_function_schema = next(
+            (
+                f
+                for f in self.function_definitions
+                if f.name == inferred_fn_name
+            ),
+            None,
+        )
+        if not selected_function_schema:
+            return FunctionCallResult(prompt=prompt, fn_name="error", args={})
 
-            logits_array = np.array(logits)
-            sorted_token_ids = np.argsort(logits_array)[::-1]
+        param_transition = '","parameters":{'
+        final_json_string += param_transition
+        self._append_encoded_text(prompt_tokens, param_transition)
 
-            next_token_id = -1
+        extracted_arguments: Dict[str, Any] = {}
+        required_keys = list(selected_function_schema.parameters.keys())
 
-            for token_id_np in sorted_token_ids:
-                token_id = int(token_id_np)
+        # 4. Generate data for each parameter sequentially
+        for index, param_name in enumerate(required_keys):
+            key_syntax = f'"{param_name}":'
+            final_json_string += key_syntax
+            self._append_encoded_text(prompt_tokens, key_syntax)
 
-                if token_id >= len(self.vocab):
-                    logits[token_id] = float('-inf')
-                    continue
+            param_schema = selected_function_schema.parameters.get(param_name,
+                                                                   {})
+            if not isinstance(param_schema, dict):
+                print(f"Warning: Malformed schema for '{param_name}',"
+                      f"defaulting to string.")
+                param_schema = {}
 
-                token_str = self.reversed_vocab.get(token_id, "")
-                if not token_str:
-                    logits[token_id] = float('-inf')
-                    continue
+            param_type = param_schema.get('type', 'string')
+            param_options = param_schema.get('enum', None)
 
-                if not self.is_valid_json(generated_text, token_str):
-                    logits[token_id] = float('-inf')
+            if param_options is not None and not isinstance(param_options,
+                                                            list):
+                print(f"Warning: 'enum' for '{param_name}' is "
+                      f"a {type(param_options).__name__}, not a list."
+                      f" Ignoring enum.")
+                param_options = None
+
+            if param_options:
+                if param_type == 'string':
+                    allowed_choices = [f'"{opt}"' for opt in param_options]
+                    generated_val = self._drive_to_target_string(
+                        prompt_tokens,
+                        allowed_choices,
+                    )
+                    final_json_string += generated_val
+                    extracted_arguments[param_name] = generated_val.strip('"')
                 else:
-                    next_token_id = token_id
-                    break
+                    allowed_choices = [
+                        str(opt).lower() if isinstance(opt, bool) else str(opt)
+                        for opt in param_options
+                    ]
+                    generated_val = self._drive_to_target_string(
+                        prompt_tokens,
+                        allowed_choices,
+                    )
+                    final_json_string += generated_val
 
-            if next_token_id == -1:
-                print("model blocked, no valid token")
-                return FunctionCallResult(
-                    prompt=prompt,
-                    name="error",
-                    parameters={}
+                    if param_type in ('number', 'integer'):
+                        try:
+                            extracted_arguments[param_name] = (
+                                float(generated_val)
+                                if param_type == 'number'
+                                else int(float(generated_val))
+                            )
+                        except (ValueError, TypeError):
+                            print(
+                                f"Warning: Failed to convert enum value "
+                                f"'{generated_val}' to {param_type}, "
+                                f"defaulting to 0"
+                            )
+                            extracted_arguments[param_name] = 0
+                    elif param_type == 'boolean':
+                        extracted_arguments[param_name] = (
+                            generated_val == 'true'
+                        )
+
+            # Pure Numeric handling
+            elif param_type in ('number', 'integer'):
+                generated_val = self._extract_numeric_value(prompt_tokens)
+                final_json_string += generated_val
+                try:
+                    extracted_arguments[param_name] = (
+                        float(generated_val)
+                        if param_type == 'number'
+                        else int(generated_val)
+                    )
+                except ValueError:
+                    print(f"Warning: Failed to convert '{generated_val}' to "
+                          f"{param_type}, defaulting to 0")
+                    extracted_arguments[param_name] = 0
+
+            # Boolean handling
+            elif param_type == 'boolean':
+                generated_val = self._drive_to_target_string(
+                    prompt_tokens,
+                    ['true', 'false'],
+                )
+                final_json_string += generated_val
+                extracted_arguments[param_name] = (
+                    generated_val == 'true'
                 )
 
-            token_str = self.reversed_vocab.get(next_token_id, "")
-            token_str = token_str.replace('Ġ', ' ')
-            generated_text += token_str
-            input_ids.append(next_token_id)
+            # Pure String handling
+            else:
+                self._append_encoded_text(prompt_tokens, '"')
+                final_json_string += '"'
 
-            open_count = generated_text.count('{')
-            closed_count = generated_text.count('}')
+                generated_val = self._extract_string_value(prompt_tokens)
+                final_json_string += generated_val + '"'
 
-            if open_count > 0 and open_count == closed_count:
-                break
+                self._append_encoded_text(prompt_tokens, '"')
+                extracted_arguments[param_name] = generated_val
 
-        last_brace_idx = generated_text.rfind('}')
-        if last_brace_idx != -1:
-            generated_text = generated_text[:last_brace_idx]
+            # Format syntax depending on parameter position
+            if index < len(required_keys) - 1:
+                final_json_string += ','
+                self._append_encoded_text(prompt_tokens, ',')
+            else:
+                final_json_string += '}'
+                self._append_encoded_text(prompt_tokens, '}')
 
-        clean_text = generated_text.strip()
-        open_braces = clean_text.count('{')
-        close_braces = clean_text.count('}')
+        # Safely close JSON if a function lacks parameters
+        if not required_keys:
+            final_json_string += '}'
+            self._append_encoded_text(prompt_tokens, '}')
 
-        if open_braces > close_braces:
-            clean_text += '}' * (open_braces - close_braces)
+        final_json_string += '}'
 
-        clean_text = clean_text.replace('""', '"')
-        clean_text = clean_text.replace(',}', '}')
-        clean_text = clean_text.replace('\\"}}', '\\""}}')
-        clean_text = re.sub(r'\\\\|\\(?![/"\\bfnrtu])', r'\\\\', clean_text)
-
-        print(f"Answer: {clean_text}")
-
-        try:
-            parsed_json = json.loads(clean_text)
-            fn_name = parsed_json.get("name", "")
-            fn_parmtr = parsed_json.get("parameters", {})
-        except json.JSONDecodeError as e:
-            print(f"something in json format went wrong: {e}")
-            fn_name = "error"
-            fn_parmtr = {}
+        print(f"Answer: {final_json_string}")
 
         return FunctionCallResult(
             prompt=prompt,
-            name=fn_name,
-            parameters=fn_parmtr
+            name=inferred_fn_name,
+            parameters=extracted_arguments
         )

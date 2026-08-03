@@ -1,91 +1,71 @@
 [
-    {
-        "name": "fn_add_numbers",
-        "description": "Add two numbers together and return their sum.",
-        "parameters": {
-            "a": {
-                "type": "number"
-            },
-            "b": {
-                "type": "number"
-            }
-        },
-        "returns": {
-            "type": "number"
-        }
+  {
+    "name": "fn_add_numbers",
+    "description": "Add two numbers together and return their sum.",
+    "parameters": {
+      "a": {
+        "type": "number"
+      },
+      "b": {
+        "type": "integer"
+      }
     },
-    {
-        "name": "fn_greet",
-        "description": "Generate a greeting message for a person by name.",
-        "parameters": {
-            "name": {
-                "type": "string"
-            }
-        },
-        "returns": {
-            "type": "string"
-        }
-    },
-    {
-        "name": "fn_reverse_string",
-        "description": "Reverse a string and return the reversed result.",
-        "parameters": {
-            "s": {
-                "type": "string"
-            }
-        },
-        "returns": {
-            "type": "string"
-        }
-    },
-    {
-        "name": "fn_get_square_root",
-        "description": "Calculate the square root of a number.",
-        "parameters": {
-            "a": {
-                "type": "number"
-            }
-        },
-        "returns": {
-            "type": "number"
-        }
-    },
-    {
-        "name": "fn_substitute_string_with_regex",
-        "description": "Replace all occurrences matching a regex pattern in a string.",
-        "parameters": {
-            "source_string": {
-                "type": "string"
-            },
-            "regex": {
-                "type": "string"
-            },
-            "replacement": {
-                "type": "string"
-            }
-        },
-        "returns": {
-            "type": "string"
-        }
-    },
-    {
-        "name": "fn_set_device_state",
-        "description": "Change the operational state of a smart home device.",
-        "parameters": {
-            "device_name": {
-                "type": "string"
-            },
-            "state": {
-                "type": "string",
-                "enum": [
-                    "ON",
-                    "OFF",
-                    "STANDBY"
-                ]
-            }
-        },
-        "returns": {
-            "type": "string"
-        }
+    "returns": {
+      "type": "number"
     }
+  },
+  {
+    "name": "fn_greet",
+    "description": "Generate a greeting message for a person by name.",
+    "parameters": {
+      "name": {
+        "type": "string"
+      }
+    },
+    "returns": {
+      "type": "string"
+    }
+  },
+  {
+    "name": "fn_reverse_string",
+    "description": "Reverse a string and return the reversed result.",
+    "parameters": {
+      "s": {
+        "type": "string"
+      }
+    },
+    "returns": {
+      "type": "string"
+    }
+  },
+  {
+    "name": "fn_get_square_root",
+    "description": "Calculate the square root of a number.",
+    "parameters": {
+      "a": {
+        "type": "number"
+      }
+    },
+    "returns": {
+      "type": "number"
+    }
+  },
+  {
+    "name": "fn_substitute_string_with_regex",
+    "description": "Replace all occurrences matching a regex pattern in a string.",
+    "parameters": {
+      "source_string": {
+        "type": "string"
+      },
+      "regex": {
+        "type": "string"
+      },
+      "replacement": {
+        "type": "string"
+      }
+    },
+    "returns": {
+      "type": "string"
+    }
+  }
 ]
