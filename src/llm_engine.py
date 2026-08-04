@@ -118,7 +118,7 @@ class FunctionCaller(BaseModel):
         valid_chars = set("0123456789.-")
         halting_chars = set(",} \n\t")
 
-        for _ in range(20):
+        for _ in range(30):
             raw_logits = self.model.get_logits_from_input_ids(prompt_tokens)
             sorted_candidates = np.argsort(raw_logits)[::-1]
 
@@ -128,9 +128,6 @@ class FunctionCaller(BaseModel):
             for candidate_id in sorted_candidates:
                 candidate_str = self._token_text(int(candidate_id))
                 if not candidate_str:
-                    continue
-
-                if '"' in candidate_str or "'" in candidate_str:
                     continue
 
                 if any(char in halting_chars for char in candidate_str):
@@ -156,6 +153,7 @@ class FunctionCaller(BaseModel):
     def _extract_string_value(self, prompt_tokens: List[int]) -> str:
         """Generate a string and stop when a closing quote appears."""
         string_val = ""
+
         for _ in range(60):
             raw_logits = self.model.get_logits_from_input_ids(prompt_tokens)
             sorted_ids = np.argsort(raw_logits)[::-1]
@@ -165,8 +163,36 @@ class FunctionCaller(BaseModel):
 
             for token_id in sorted_ids:
                 token_str = self._token_text(int(token_id))
+
                 if not token_str:
                     continue
+                if '\n' in token_str or '\r' in token_str:
+                    continue
+
+                if '"' in token_str:
+                    unescaped_quote_idx = -1
+                    for i, char in enumerate(token_str):
+                        if char != '"':
+                            continue
+
+                        context_before = string_val + token_str[:i]
+                        trailing_bs = (len(context_before) -
+                                       len(context_before.rstrip('\\')))
+                        is_escaped = trailing_bs % 2 == 1
+
+                        if not is_escaped:
+                            unescaped_quote_idx = i
+                            break
+
+                    if unescaped_quote_idx != -1:
+                        sliced_str = token_str[:unescaped_quote_idx]
+                        string_val += sliced_str
+
+                        if sliced_str:
+                            self._append_encoded_text(prompt_tokens,
+                                                      sliced_str)
+
+                        return string_val
 
                 selected_id = int(token_id)
                 selected_char = token_str
@@ -175,17 +201,8 @@ class FunctionCaller(BaseModel):
             if selected_id == -1:
                 break
 
-            if '"' in selected_char:
-                quote_pos = selected_char.index('"')
-                if quote_pos > 0 and selected_char[quote_pos - 1] == '\\':
-                    string_val += selected_char
-                    prompt_tokens.append(selected_id)
-                else:
-                    string_val += selected_char[:quote_pos]
-                    break
-            else:
-                string_val += selected_char
-                prompt_tokens.append(selected_id)
+            string_val += selected_char
+            prompt_tokens.append(selected_id)
 
         return string_val
 

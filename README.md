@@ -135,14 +135,6 @@ Comprehensive test cases were created to validate edge cases and crash scenarios
 - Zero values
 - Negative square root (invalid math)
 
-**String/Encoding Cases**:
-- Special characters (!@#$%^&*())
-- Unicode characters (你好世界, 🎉🎊😀, 𝐀𝐁𝐂𝐃𝐄𝐅𝐆𝐇)
-- Escape sequences (\n, \t, \r, \\)
-- Quoted strings with escaped quotes
-- File paths with backslashes
-- Empty strings
-
 **Type Handling**:
 - Integer conversion from floats
 - Enum value violations
@@ -263,9 +255,9 @@ Provide test cases in `data/input/function_calling_tests.json`:
 
 ```json
 [
-  { "prompt": "Add 5 and 10", "name": "fn_add_numbers" },
-  { "prompt": "Greet Alice", "name": "fn_greet" },
-  { "prompt": "Set priority to high", "name": "fn_enum_priority" }
+  { "prompt": "Add 5 and 10",},
+  { "prompt": "Greet Alice",},
+  { "prompt": "Set priority to high"}
 ]
 ```
 
