@@ -130,8 +130,14 @@ class FunctionCaller(BaseModel):
                 if not candidate_str:
                     continue
 
+                if '"' in candidate_str or "'" in candidate_str:
+                    continue
+
                 if any(char in halting_chars for char in candidate_str):
-                    return numeric_str if numeric_str else "0"
+                    if numeric_str:
+                        return numeric_str
+                    else:
+                        continue
 
                 if all(char in valid_chars for char in candidate_str):
                     if candidate_str.count('.') + numeric_str.count('.') <= 1:
@@ -329,7 +335,7 @@ class FunctionCaller(BaseModel):
                     extracted_arguments[param_name] = (
                         float(generated_val)
                         if param_type == 'number'
-                        else int(generated_val)
+                        else int(float(generated_val))
                     )
                 except ValueError:
                     print(f"Warning: Failed to convert '{generated_val}' to "
