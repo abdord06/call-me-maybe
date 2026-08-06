@@ -115,7 +115,7 @@ class FunctionCaller(BaseModel):
     def _extract_numeric_value(self, prompt_tokens: List[int]) -> str:
         """Force the model to yield only valid characters for a number."""
         numeric_str = ""
-        valid_chars = set("0123456789.-")
+        valid_chars = set("0123456789.-eE+")
         halting_chars = set(",} \n\t")
 
         for _ in range(30):
@@ -131,35 +131,57 @@ class FunctionCaller(BaseModel):
                     continue
 
                 if any(char in halting_chars for char in candidate_str):
-                    if numeric_str:
+                    if numeric_str and numeric_str not in ("-", "+", ".",
+                                                           "e", "E", "-.",
+                                                           "+."):
                         return numeric_str
                     else:
                         continue
 
                 if all(char in valid_chars for char in candidate_str):
-                    if candidate_str.count('.') + numeric_str.count('.') <= 1:
+                    test_str = numeric_str + candidate_str
+
+                    e_count = test_str.count('e') + test_str.count('E')
+                    is_valid = True
+
+                    for i, char in enumerate(test_str):
+                        if char in '-+':
+                            if i != 0 and test_str[i-1] not in 'eE':
+                                is_valid = False
+                                break
+                        elif char == '.':
+                            if test_str.count('.') > 1:
+                                is_valid = False
+                                break
+                            if 'e' in test_str[:i] or 'E' in test_str[:i]:
+                                is_valid = False
+                                break
+
+                    if is_valid and e_count <= 1:
                         selected_id = candidate_id
                         selected_char = candidate_str
                         break
 
             if selected_id == -1:
                 break
-
             numeric_str += selected_char
-            prompt_tokens.append(selected_id)
+            prompt_tokens.append(int(selected_id))
 
-        return numeric_str.strip() if numeric_str.strip() else "0"
+        numeric_str = numeric_str.strip()
+        if numeric_str in ("", "-", "+", ".", "e", "E", "-.", "+."):
+            return "0"
+
+        return numeric_str
 
     def _extract_string_value(self, prompt_tokens: List[int]) -> str:
         """Generate a string and stop when a closing quote appears."""
+        string_token_ids: List[int] = []
         string_val = ""
-
         for _ in range(60):
             raw_logits = self.model.get_logits_from_input_ids(prompt_tokens)
             sorted_ids = np.argsort(raw_logits)[::-1]
 
             selected_id = -1
-            selected_char = ""
 
             for token_id in sorted_ids:
                 token_str = self._token_text(int(token_id))
@@ -186,13 +208,18 @@ class FunctionCaller(BaseModel):
 
                     if unescaped_quote_idx != -1:
                         sliced_str = token_str[:unescaped_quote_idx]
-                        string_val += sliced_str
+                        final_decoded_string = ""
+                        if string_token_ids:
+                            final_decoded_string = self.model.decode(
+                                string_token_ids
+                                )
 
+                        final_decoded_string += sliced_str
                         if sliced_str:
                             self._append_encoded_text(prompt_tokens,
                                                       sliced_str)
 
-                        return string_val
+                        return final_decoded_string
 
                 selected_id = int(token_id)
                 selected_char = token_str
@@ -202,9 +229,10 @@ class FunctionCaller(BaseModel):
                 break
 
             string_val += selected_char
+            string_token_ids.append(selected_id)
             prompt_tokens.append(selected_id)
 
-        return string_val
+        return str(self.model.decode(string_token_ids))
 
     def process_prompt(self, prompt: str) -> FunctionCallResult:
         """Process a prompt using structured state machine decoding."""
