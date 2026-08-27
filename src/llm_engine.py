@@ -1,15 +1,31 @@
 import json
 import numpy as np
-from typing import Any, Dict, List
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Any, Dict, List, Optional
+from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from llm_sdk import Small_LLM_Model  # type: ignore
+
+
+class PromptTest(BaseModel):
+    """Pydantic model for input tests."""
+    model_config = ConfigDict(extra='forbid', strict=True)
+    prompt: StrictStr
+
+
+class ParameterSchema(BaseModel):
+    """Strict validation for each parameter's schema."""
+    model_config = ConfigDict(extra='forbid', strict=True)
+
+    type: StrictStr
+    enum: Optional[List[Any]] = None
 
 
 class FunctionDefinition(BaseModel):
     """Pydantic model representing a function's definition and schema."""
+    model_config = ConfigDict(extra='forbid', strict=True)
+
     name: str
     description: str
-    parameters: Dict[str, Any]
+    parameters: Dict[str, ParameterSchema]
     returns: Dict[str, str]
 
 
@@ -283,12 +299,14 @@ class FunctionCaller(BaseModel):
         final_json_string = start_syntax
         self._append_encoded_text(prompt_tokens, start_syntax)
 
-        legal_function_names = [fn.name for fn in self.function_definitions]
-        inferred_fn_name = self._drive_to_target_string(
+        legal_function_names = [f'{fn.name}"'
+                                for fn in self.function_definitions]
+        inferred_fn_name_raw = self._drive_to_target_string(
             prompt_tokens,
             legal_function_names,
         )
-        final_json_string += inferred_fn_name
+        final_json_string += inferred_fn_name_raw
+        inferred_fn_name = inferred_fn_name_raw.rstrip('"')
 
         selected_function_schema = next(
             (
@@ -303,7 +321,7 @@ class FunctionCaller(BaseModel):
                                       name="error",
                                       parameters={})
 
-        param_transition = '","parameters":{'
+        param_transition = ',"parameters":{'
         final_json_string += param_transition
         self._append_encoded_text(prompt_tokens, param_transition)
 
@@ -312,26 +330,14 @@ class FunctionCaller(BaseModel):
 
         # Generate data for each parameter sequentially
         for index, param_name in enumerate(required_keys):
+            delimiter_handled = False
             key_syntax = f'"{param_name}":'
             final_json_string += key_syntax
             self._append_encoded_text(prompt_tokens, key_syntax)
 
-            param_schema = selected_function_schema.parameters.get(param_name,
-                                                                   {})
-            if not isinstance(param_schema, dict):
-                print(f"Warning: Malformed schema for '{param_name}',"
-                      f"defaulting to string.")
-                param_schema = {}
-
-            param_type = param_schema.get('type', 'string')
-            param_options = param_schema.get('enum', None)
-
-            if param_options is not None and not isinstance(param_options,
-                                                            list):
-                print(f"Warning: 'enum' for '{param_name}' is "
-                      f"a {type(param_options).__name__}, not a list."
-                      f" Ignoring enum.")
-                param_options = None
+            param_obj = selected_function_schema.parameters[param_name]
+            param_type = param_obj.type
+            param_options = param_obj.enum
 
             if param_options:
                 if param_type == 'string':
@@ -343,15 +349,20 @@ class FunctionCaller(BaseModel):
                     final_json_string += generated_val
                     extracted_arguments[param_name] = generated_val.strip('"')
                 else:
+                    delimiter = ',' if index < len(required_keys) - 1 else '}'
                     allowed_choices = [
-                        str(opt).lower() if isinstance(opt, bool) else str(opt)
+                        (str(opt).lower() if isinstance(opt, bool)
+                         else str(opt)) + delimiter
                         for opt in param_options
                     ]
-                    generated_val = self._drive_to_target_string(
+                    generated_val_raw = self._drive_to_target_string(
                         prompt_tokens,
                         allowed_choices,
                     )
-                    final_json_string += generated_val
+                    final_json_string += generated_val_raw
+
+                    generated_val = generated_val_raw.rstrip(delimiter)
+                    delimiter_handled = True
 
                     if param_type in ('number', 'integer'):
                         try:
@@ -361,11 +372,6 @@ class FunctionCaller(BaseModel):
                                 else int(float(generated_val))
                             )
                         except (ValueError, TypeError):
-                            print(
-                                f"Warning: Failed to convert enum value "
-                                f"'{generated_val}' to {param_type}, "
-                                f"defaulting to 0"
-                            )
                             extracted_arguments[param_name] = 0
                     elif param_type == 'boolean':
                         extracted_arguments[param_name] = (
@@ -409,12 +415,13 @@ class FunctionCaller(BaseModel):
                 self._append_encoded_text(prompt_tokens, '"')
                 extracted_arguments[param_name] = generated_val
 
-            if index < len(required_keys) - 1:
-                final_json_string += ','
-                self._append_encoded_text(prompt_tokens, ',')
-            else:
-                final_json_string += '}'
-                self._append_encoded_text(prompt_tokens, '}')
+            if not delimiter_handled:
+                if index < len(required_keys) - 1:
+                    final_json_string += ','
+                    self._append_encoded_text(prompt_tokens, ',')
+                else:
+                    final_json_string += '}'
+                    self._append_encoded_text(prompt_tokens, '}')
 
         if not required_keys:
             final_json_string += '}'

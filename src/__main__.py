@@ -3,7 +3,8 @@ import json
 import sys
 import os
 from typing import Any, List, Dict
-from src.llm_engine import FunctionCaller, FunctionDefinition
+from src.llm_engine import FunctionCaller, FunctionDefinition, PromptTest
+from pydantic import ValidationError
 
 
 def main() -> None:
@@ -49,23 +50,41 @@ def main() -> None:
                   " must be a JSON Array [].")
             sys.exit(1)
 
-        print("Success in parsing input files")
-        print(f"Output will be registered in: {args.output}")
+        pydantic_functions = []
+        seen_names = set()
 
-        pydantic_functions = [
-            FunctionDefinition(**f_dict) for f_dict in function_defs
-        ]
+        for i, f_dict in enumerate(function_defs):
+            try:
+                func_def = FunctionDefinition(**f_dict)
+            except ValidationError as e:
+                print(f"Error: Invalid format in functions_definition.json"
+                      f" at index {i}:\n{e}")
+                sys.exit(1)
+
+            if func_def.name in seen_names:
+                print(f"Error: Duplicate function name '{func_def.name}'")
+                sys.exit(1)
+
+            seen_names.add(func_def.name)
+            pydantic_functions.append(func_def)
+
+        validated_prompts = []
+        for i, test_dict in enumerate(input_tests):
+            try:
+                test_obj = PromptTest(**test_dict)
+                validated_prompts.append(test_obj.prompt)
+            except ValidationError as e:
+                print(f"Error: Invalid format in function_calling_tests.json"
+                      f" at index {i}:\n{e}")
+                sys.exit(1)
+
+        print("Success in parsing input files (Strictly validated)")
+        print(f"Output will be registered in: {args.output}")
 
         engine = FunctionCaller(function_definitions=pydantic_functions)
 
         results: List[Dict[str, Any]] = []
-        for test in input_tests:
-            prompt_txt = test.get("prompt")
-            if prompt_txt is None:
-                print("\nWarning: Test object is missing "
-                      "the 'prompt' key. Defaulting to empty string.")
-                prompt_txt = ""
-
+        for prompt_txt in validated_prompts:
             print(f"\nAnswering: {prompt_txt}")
 
             try:
