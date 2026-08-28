@@ -1,3 +1,5 @@
+"""Command-line entry point for the function-calling demo application."""
+
 import argparse
 import json
 import sys
@@ -8,7 +10,12 @@ from pydantic import ValidationError
 
 
 def main() -> None:
-    """Entry point for the Function Calling LLM program."""
+    """Run the CLI workflow for validating inputs and generating outputs.
+
+    The command-line interface loads function definitions and prompt tests,
+    validates them with Pydantic, invokes the function-calling engine, and
+    writes the resulting structured calls to disk.
+    """
     parser = argparse.ArgumentParser(description="LLM, call me maybe")
 
     parser.add_argument(
