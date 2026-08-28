@@ -9,6 +9,29 @@ from src.llm_engine import FunctionCaller, FunctionDefinition, PromptTest
 from pydantic import ValidationError
 
 
+def reject_duplicates(
+    ordered_pairs: List[tuple[str, Any]],
+) -> Dict[str, Any]:
+    """Build a mapping from JSON object pairs and reject duplicate keys.
+
+    Args:
+        ordered_pairs: Sequence of key-value pairs produced while decoding a
+            JSON object.
+
+    Returns:
+        A dictionary containing the decoded key-value pairs.
+
+    Raises:
+        ValueError: If the JSON object contains a duplicate key.
+    """
+    d = {}
+    for key, value in ordered_pairs:
+        if key in d:
+            raise ValueError(f"Duplicate key found in JSON: '{key}'")
+        d[key] = value
+    return d
+
+
 def main() -> None:
     """Run the CLI workflow for validating inputs and generating outputs.
 
@@ -42,10 +65,16 @@ def main() -> None:
 
     try:
         with open(args.functions_definition, 'r', encoding='utf-8') as f:
-            function_defs: List[Dict[str, Any]] = json.load(f)
+            function_defs: List[Dict[str, Any]] = json.load(
+                f,
+                object_pairs_hook=reject_duplicates,
+            )
 
         with open(args.input, 'r', encoding='utf-8') as f:
-            input_tests: List[Dict[str, Any]] = json.load(f)
+            input_tests: List[Dict[str, Any]] = json.load(
+                f,
+                object_pairs_hook=reject_duplicates,
+            )
 
         if not isinstance(input_tests, list):
             print("Error: 'function_calling_tests.json'"
@@ -122,6 +151,9 @@ def main() -> None:
         sys.exit(1)
     except json.JSONDecodeError as e:
         print(f"Error in Json file {e}")
+        sys.exit(1)
+    except ValueError as e:
+        print(f"Error parsing JSON: {e}")
         sys.exit(1)
     except Exception as e:
         print(f"Unexpected error {e}")

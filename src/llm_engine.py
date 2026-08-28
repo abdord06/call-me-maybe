@@ -2,7 +2,7 @@
 
 import json
 import numpy as np
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from llm_sdk import Small_LLM_Model  # type: ignore
 
@@ -26,8 +26,18 @@ class ParameterSchema(BaseModel):
     """
     model_config = ConfigDict(extra='forbid', strict=True)
 
-    type: StrictStr
+    type: Literal['string', 'number', 'integer', 'boolean']
     enum: Optional[List[Any]] = None
+
+
+class ReturnSchema(BaseModel):
+    """Schema describing the return type of a callable function.
+
+    Attributes:
+        type: The declared return type for the function.
+    """
+    model_config = ConfigDict(extra='forbid', strict=True)
+    type: Literal['string', 'number', 'integer', 'boolean']
 
 
 class FunctionDefinition(BaseModel):
@@ -44,7 +54,7 @@ class FunctionDefinition(BaseModel):
     name: str
     description: str
     parameters: Dict[str, ParameterSchema]
-    returns: Dict[str, str]
+    returns: ReturnSchema
 
 
 class FunctionCallResult(BaseModel):
