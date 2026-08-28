@@ -99,7 +99,7 @@ class FunctionCaller(BaseModel):
     ) -> str:
         """Restrict output to a predefined list of valid strings."""
         accumulated_result = ""
-        safety_limit = 25
+        safety_limit = 100  # Increased from 25 to allow longer outputs
 
         for _ in range(safety_limit):
             valid_next_ids = self._find_allowed_continuations(
@@ -276,8 +276,17 @@ class FunctionCaller(BaseModel):
         for fn in self.function_definitions:
             system_context += f"- Function Name: {fn.name}\n"
             system_context += f"  Description: {fn.description}\n"
+
+            # Convert ParameterSchema objects to dict for JSON serialization
+            params_dict = {}
+            for param_name, param_obj in fn.parameters.items():
+                params_dict[param_name] = {
+                    "type": param_obj.type,
+                    "enum": param_obj.enum
+                }
+
             system_context += (
-                f"  Parameters: {json.dumps(fn.parameters)}\n\n"
+                f"  Parameters: {json.dumps(params_dict)}\n\n"
             )
 
         system_context += (
@@ -426,8 +435,9 @@ class FunctionCaller(BaseModel):
         if not required_keys:
             final_json_string += '}'
             self._append_encoded_text(prompt_tokens, '}')
-
-        final_json_string += '}'
+        else:
+            final_json_string += '}'
+            self._append_encoded_text(prompt_tokens, '}')
 
         print(f"Answer: {final_json_string}")
 
