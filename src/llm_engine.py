@@ -51,8 +51,8 @@ class FunctionDefinition(BaseModel):
     """
     model_config = ConfigDict(extra='forbid', strict=True)
 
-    name: str
-    description: str
+    name: StrictStr = Field(pattern=r'^[a-zA-Z0-9_]+$')
+    description: StrictStr
     parameters: Dict[str, ParameterSchema]
     returns: ReturnSchema
 
@@ -417,7 +417,7 @@ class FunctionCaller(BaseModel):
             legal_function_names,
         )
         final_json_string += inferred_fn_name_raw
-        inferred_fn_name = inferred_fn_name_raw.rstrip('"')
+        inferred_fn_name = inferred_fn_name_raw[:-1]
 
         selected_function_schema = next(
             (
